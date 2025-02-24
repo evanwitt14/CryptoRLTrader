@@ -47,10 +47,9 @@ class TradingAgent:
         return model
         
     def remember(self, state, action, reward, next_state, done):
+        """Store experience with priority"""
         # Calculate priority based on reward magnitude
         priority = abs(reward) + 0.01  # Small constant to ensure non-zero priority
-        
-        # Store experience with priority
         self.memory.append((state, action, reward, next_state, done, priority))
         
         # Keep memory size in check
@@ -144,31 +143,18 @@ class TradingAgent:
         return loss.item()  # Return loss for monitoring
 
     def save_model(self, path):
-        """Save the complete model state"""
-        checkpoint = {
+        torch.save({
             'model_state_dict': self.model.state_dict(),
-            'target_model_state_dict': self.target_model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'epsilon': self.epsilon,
-            'memory': list(self.memory)
-        }
-        torch.save(checkpoint, path)
+            'epsilon': self.epsilon
+        }, path)
 
     def load_model(self, path):
-        """Load the complete model state"""
         try:
             checkpoint = torch.load(path)
-            
-            # Handle both old and new save formats
-            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                self.model.load_state_dict(checkpoint['model_state_dict'])
-                self.target_model.load_state_dict(checkpoint['target_model_state_dict'])
-                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                self.epsilon = checkpoint['epsilon']
-                self.memory = deque(checkpoint['memory'], maxlen=self.memory.maxlen)
-            else:
-                # Old format or invalid checkpoint
-                logger.warning("Invalid or old format checkpoint. Starting with fresh model.")
-                
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.epsilon = checkpoint['epsilon']
+            logger.info("Successfully loaded model from %s", path)
         except Exception as e:
             logger.warning(f"Error loading model: {e}. Starting with fresh model.") 

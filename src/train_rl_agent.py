@@ -21,6 +21,9 @@ def setup_args():
     return parser.parse_args()
 
 def train_agent(args, config, n_episodes=1000):
+    # Add safe globals for model loading
+    torch.serialization.add_safe_globals(['_reconstruct'])
+    
     data_processor = DataProcessor(config)
     model_trainer = ModelTrainer(config, data_processor)
     backtester = Backtester(config)
@@ -54,8 +57,9 @@ def train_agent(args, config, n_episodes=1000):
     if Path(model_path).exists():
         logger.info("Loading existing RL model...")
         agent.load_model(model_path)
-        # Start with lower epsilon for trained model
-        agent.epsilon = max(0.3, agent.epsilon_min)
+        # Reset epsilon and memory for fresh training
+        agent.epsilon = 0.5  # Start with moderate exploration
+        agent.memory.clear()  # Clear old experiences
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     agent.model = agent.model.to(device)
@@ -79,7 +83,8 @@ def train_agent(args, config, n_episodes=1000):
         if results['total_return'] > best_return:
             best_return = results['total_return']
             best_agent = copy.deepcopy(agent)
-            print(f"\nNew best return: {best_return:.2%}")
+            agent.save_model(model_path)
+            logger.info(f"New best model saved with return: {best_return:.2%}")
             no_improvement_count = 0
         else:
             no_improvement_count += 1

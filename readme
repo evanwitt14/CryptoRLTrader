@@ -1,0 +1,91 @@
+Crypto Trading Bot with Deep Reinforcement Learning
+
+Overview
+An advanced cryptocurrency trading system that combines ensemble machine learning for price prediction with reinforcement learning for optimal trade execution. The system uses LSTM, Random Forest, and SVR models for prediction, coupled with a DQN (Deep Q-Network) agent for trade decisions.
+
+Features
+Ensemble price prediction
+Reinforcement learning-based trade execution
+Dynamic position sizing
+Advanced risk management
+Technical indicator integration
+Comprehensive backtesting
+
+Installation
+git clone <repository-url>
+cd crypto-trading-bot
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+
+pip install -r requirements.txt
+
+Project Structure
+src/
+├── main.py              
+├── train_rl_agent.py    
+├── backtester.py        
+├── model_trainer.py     
+├── config.py            
+└── data_processor.py    
+
+Configuration
+    entry_threshold: float = 0.005    
+    exit_threshold: float = 0.001
+    stop_loss: float = 0.025         
+    take_profit: float = 0.035       
+    trailing_stop: float = 0.015     
+    max_position_size: float = 0.08   
+    
+    # Risk management
+    risk_per_trade: float = 0.01     
+    max_trades: int = 1              
+    min_volatility: float = 0.01    
+    max_drawdown: float = 0.15
+
+Usage
+1. Trains the ensemble of LSTM, Random Forest, and SVR models:
+python src/main.py --symbol BTC/USDT --interval 1d --lookback 60 --epochs 100
+
+2. Trains the RL agent:
+python src/train_rl_agent.py --symbol BTC/USDT --interval 1d --episodes 1000
+
+3. Runs backtesting:
+python src/backtester.py --symbol BTC/USDT --interval 1d --lookback 60
+The backtesting engine (referencing backtester.py):
+
+
+Risk Management
+1. Position sizing
+2. Exit condition
+
+Performance Metrics
+The system tracks various metrics (referencing model_trainer.py):
+
+Command Line Arguments
+--symbol     Trading pair (default: BTC/USDT)
+--interval   Timeframe (default: 1d)
+--lookback   Historical data window (default: 60)
+--epochs     Training epochs for base models (default: 100)
+--episodes   Training episodes for RL agent (default: 1000)
+
+
+est Practices
+Start with daily timeframes (1d)
+Use at least 60 days of lookback data
+Train base models first, then RL agent
+Backtest thoroughly before live trading
+Monitor drawdown and risk metrics closely
+Warning
+This is a research project. Cryptocurrency markets are highly volatile and trading carries significant risk. Use at your own discretion.
+Contributing
+Pull requests are welcome. For major changes, please open an issue first to discuss proposed changes.
+License
+MIT
+Would you like me to elaborate on any specific component or add more details to the documentation?
+
+
+
+
+
+

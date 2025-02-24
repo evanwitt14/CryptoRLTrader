@@ -12,51 +12,22 @@ class Backtester:
         self.initial_capital = initial_capital
         
     def _calculate_reward(self, trades, current_price, current_data):
-        """Enhanced reward calculation with immediate feedback"""
-        # Base case - no position
         if not trades or not trades[-1]['active']:
-            # Penalize missed opportunities more when signals are strong
-            signal_strength = abs(current_data['returns']) + abs(current_data['macd'])
-            missed_reward = -0.1 * signal_strength
-            return missed_reward
-            
+            return -0.001  # Smaller penalty
+        
         trade = trades[-1]
-        unrealized_pnl = (current_price - trade['entry_price']) * trade['position']
-        position_size = abs(trade['position_size'])
+        hold_time = len(trade['price_history'])
         
-        # Calculate returns
-        pct_return = unrealized_pnl / (trade['entry_price'] * position_size)
+        # Penalize extremely short trades
+        if hold_time < self.config.min_hold_bars:
+            return -0.02
         
-        # Technical signal alignment
-        signal_reward = 0.0
-        if trade['position'] > 0:  # Long position
-            if current_data['close'] > current_data['bb_upper']:
-                signal_reward += 0.2  # Strong uptrend
-            if current_data['rsi'] < 30:
-                signal_reward += 0.1  # Oversold bounce potential
-        else:  # Short position
-            if current_data['close'] < current_data['bb_lower']:
-                signal_reward += 0.2  # Strong downtrend
-            if current_data['rsi'] > 70:
-                signal_reward += 0.1  # Overbought reversal potential
-                
-        # Time decay and risk adjustment
-        holding_penalty = -0.001 * len(trade['price_history'])
-        volatility_penalty = -0.1 * current_data['volatility']
+        # Calculate regular reward
+        price_diff = current_price - trade['entry_price']
+        unrealized_pnl = price_diff * trade['position_size'] * trade['position']
+        pct_return = unrealized_pnl / (trade['entry_price'] * trade['position_size'])
         
-        # Combine rewards
-        reward = (
-            pct_return * 300.0 +      # Stronger emphasis on actual returns
-            signal_reward +           # Technical signal alignment
-            holding_penalty +         # Penalize long holds
-            volatility_penalty       # Risk adjustment
-        )
-        
-        # Multiply reward for profitable exits
-        if not trade['active'] and pct_return > 0:
-            reward *= 5.0
-            
-        return reward
+        return pct_return * self.config.reward_scaling
         
     def _get_next_state(self, i, df, position, capital, trades):
         """Get the next state for the RL agent"""
@@ -74,65 +45,35 @@ class Backtester:
         
     def run_backtest(self, y_true, y_pred, agent=None, training=False, 
                     batch_update_freq=1, replay_batch_size=32):
+        """Run backtest with proper trade management"""
         capital = self.initial_capital
+        max_capital = capital
         position = 0
         trades = []
-        update_counter = 0
-        max_capital = capital
-        episode_rewards = []
         
-        # Calculate signals
-        df = pd.DataFrame({'close': y_true})
-        df['pred'] = y_pred
-        
-        # Add more price action signals
-        df['returns'] = df['close'].pct_change()
-        df['pred_returns'] = df['pred'].pct_change()
-        df['momentum'] = df['returns'].rolling(10).mean()
-        df['volatility'] = df['returns'].rolling(20).std()
-        
-        # Calculate trend
-        df['sma20'] = df['close'].rolling(20).mean()
-        df['trend'] = np.where(df['close'] > df['sma20'], 1, -1)
-        
-        # Technical indicators
-        df['rsi'] = ta.momentum.RSIIndicator(df['close']).rsi()
-        df['macd'] = ta.trend.MACD(df['close']).macd_diff()
-        
-        # Bollinger Bands
-        bb = ta.volatility.BollingerBands(df['close'])
-        df['bb_upper'] = bb.bollinger_hband()
-        df['bb_middle'] = bb.bollinger_mavg()
-        df['bb_lower'] = bb.bollinger_lband()
-        
-        # Fill NaN values
-        df = df.ffill().bfill()  # Using newer pandas methods
-        
-        # Add exploration noise during training
-        if training and agent:
-            noise_scale = max(0.002, agent.epsilon * 0.01)
-            noise = np.random.normal(0, noise_scale, len(y_pred))
-            y_pred = y_pred + noise
+        df = self._prepare_backtest_data(y_true, y_pred)
         
         for i in range(20, len(y_true)):
             current_price = y_true[i]
             
+            # Check existing trades first
+            if trades and trades[-1]['active']:
+                exit_price = self._check_exit_conditions(
+                    trades[-1], current_price, 
+                    df['returns'].iloc[i], df['pred_returns'].iloc[i]
+                )
+                if exit_price:
+                    pnl = self._close_trade(trades[-1], exit_price)
+                    capital += pnl
+                    position = 0
+                    logger.info(f"Trade closed - PnL: ${pnl:.2f}, Capital: ${capital:.2f}")
+            
+            # Get state and action for RL agent
             if training and agent:
-                # Get state and action
-                state = np.array([
-                    df['returns'].iloc[i],
-                    df['pred_returns'].iloc[i],
-                    df['rsi'].iloc[i] / 100,
-                    df['trend'].iloc[i],
-                    df['volatility'].iloc[i],
-                    position,
-                    capital / self.initial_capital,
-                    len([t for t in trades if t['active']]) / self.config.max_trades
-                ])
-                
+                state = self._get_state(i, df, position, capital, trades)
                 action = agent.act(state)
                 
-                # Convert action to trading decision
+                # Execute trades based on action
                 if action == 0:  # Hold
                     pass
                 elif action == 1 and position <= 0:  # Buy
@@ -151,9 +92,10 @@ class Backtester:
                             'exit_price': None,
                             'entry_time': i,
                             'exit_time': None,
-                            'profit_loss': 0.0  # Initialize profit/loss
+                            'profit_loss': 0.0
                         })
                         position = 1
+                        logger.info(f"Long entry at {current_price:.2f}")
                 elif action == 2 and position >= 0:  # Sell
                     if len([t for t in trades if t['active']]) < self.config.max_trades:
                         position_size = self._calculate_position_size(capital, current_price)
@@ -170,58 +112,32 @@ class Backtester:
                             'exit_price': None,
                             'entry_time': i,
                             'exit_time': None,
-                            'profit_loss': 0.0  # Initialize profit/loss
+                            'profit_loss': 0.0
                         })
                         position = -1
-                
-                # Calculate reward and get next state
+                        logger.info(f"Short entry at {current_price:.2f}")
+
+            # Update max capital
+            max_capital = max(max_capital, capital)
+            
+            # Store experience if training
+            if training and agent:
                 reward = self._calculate_reward(trades, current_price, df.iloc[i])
-                next_state = self._get_next_state(i, df, position, capital, trades)
-                
-                # Store experience
-                agent.remember(state, action, reward, next_state, i == len(y_true)-1)
+                next_state = self._get_state(i, df, position, capital, trades)
+                done = i == len(y_true)-1
+                agent.remember(state, action, reward, next_state, done)
                 
                 # Batch update
-                update_counter += 1
-                if update_counter >= batch_update_freq:
+                if i % batch_update_freq == 0:
                     agent.replay(replay_batch_size)
-                    update_counter = 0
-            
-            # Skip if volatility is too low
-            if df['volatility'].iloc[i] < self.config.min_volatility:
-                continue
-            
-            # Check existing trade
-            if position != 0:
-                for trade in [t for t in trades if t['active']]:
-                    exit_price = self._check_exit_conditions(
-                        trade, current_price, df['returns'].iloc[i], df['pred_returns'].iloc[i]
-                    )
-                    
-                    if exit_price:
-                        capital += self._close_trade(trade, exit_price, 0.001)
-                        position = 0
-            
-            # Check for new trade
-            else:
-                signal = self._calculate_entry_signal(
-                    df['returns'].iloc[i], df['pred_returns'].iloc[i], 
-                    df['volatility'].iloc[i], trades
-                )
-                
-                if signal != 0:
-                    position = signal
-                    trade = self._open_trade(position, current_price, 
-                                           capital * self.config.risk_per_trade, 
-                                           capital, i)
-                    trades.append(trade)
-                    capital -= trade['position_size']
-            
-            # Update maximum capital
-            max_capital = max(max_capital, capital)
         
+        # Close any remaining open trades at the end
+        if trades and trades[-1]['active']:
+            pnl = self._close_trade(trades[-1], y_true[-1])
+            capital += pnl
+            
+        # Calculate and return metrics
         metrics = self._calculate_backtest_metrics(capital, trades, max_capital)
-        metrics['trades'] = trades
         return metrics
     
     def _calculate_entry_signal(self, returns, pred_returns, volatility, trades):
@@ -262,84 +178,82 @@ class Backtester:
         }
 
     def _check_exit_conditions(self, trade, current_price, returns, pred_returns):
-        """Check if trade should be closed"""
-        # Update price history and extremes
+        """Enhanced exit conditions with better loss management"""
+        if not trade['active']:
+            return None
+        
+        # Force minimum hold period
         trade['price_history'].append(current_price)
+        if len(trade['price_history']) < self.config.min_hold_bars:
+            return None
+        
+        # Update trade metrics
+        trade['max_price'] = max(trade['max_price'], current_price)
+        trade['min_price'] = min(trade['min_price'], current_price)
+        
+        # Calculate current trade metrics
+        price_diff = current_price - trade['entry_price']
+        unrealized_pnl = price_diff * trade['position_size'] * trade['position']
+        pct_return = unrealized_pnl / (trade['entry_price'] * trade['position_size'])
+        
+        # Exit conditions
         if trade['position'] > 0:  # Long position
-            trade['max_price'] = max(trade['max_price'], current_price)
-            # Update trailing stop for longs
-            new_stop = current_price * (1 - self.config.trailing_stop)
-            trade['trailing_stop'] = max(trade['trailing_stop'], new_stop)
+            if (current_price <= trade['entry_price'] * (1 - self.config.stop_loss) or
+                current_price <= trade['max_price'] * (1 - self.config.trailing_stop) or
+                len(trade['price_history']) >= self.config.max_hold_bars):
+                return current_price
         else:  # Short position
-            trade['min_price'] = min(trade['min_price'], current_price)
-            # Update trailing stop for shorts
-            new_stop = current_price * (1 + self.config.trailing_stop)
-            trade['trailing_stop'] = min(trade['trailing_stop'], new_stop)
-        
-        # Calculate stop loss and take profit levels
-        if trade['position'] > 0:
-            stop_loss = trade['entry_price'] * (1 - self.config.stop_loss)
-            take_profit = trade['entry_price'] * (1 + self.config.take_profit)
-            # Exit conditions for longs
-            if current_price <= stop_loss:
-                logger.info(f"Long stop loss triggered at {current_price:.2f}")
+            if (current_price >= trade['entry_price'] * (1 + self.config.stop_loss) or
+                current_price >= trade['min_price'] * (1 + self.config.trailing_stop) or
+                len(trade['price_history']) >= self.config.max_hold_bars):
                 return current_price
-            elif current_price >= take_profit:
-                logger.info(f"Long take profit triggered at {current_price:.2f}")
-                return current_price
-            elif current_price <= trade['trailing_stop']:
-                logger.info(f"Long trailing stop triggered at {current_price:.2f}")
-                return current_price
-        else:
-            stop_loss = trade['entry_price'] * (1 + self.config.stop_loss)
-            take_profit = trade['entry_price'] * (1 - self.config.take_profit)
-            # Exit conditions for shorts
-            if current_price >= stop_loss:
-                logger.info(f"Short stop loss triggered at {current_price:.2f}")
-                return current_price
-            elif current_price <= take_profit:
-                logger.info(f"Short take profit triggered at {current_price:.2f}")
-                return current_price
-            elif current_price >= trade['trailing_stop']:
-                logger.info(f"Short trailing stop triggered at {current_price:.2f}")
-                return current_price
-        
+            
         return None
 
     def _close_trade(self, trade, exit_price, slippage=0.001):
-        """Close a trade and calculate profit/loss"""
-        # Calculate slippage
+        """Close trade with detailed logging"""
         actual_exit_price = exit_price * (1 - slippage if trade['position'] > 0 else 1 + slippage)
         
-        # Calculate profit/loss
-        price_diff = (actual_exit_price - trade['entry_price']) * trade['position']
-        trade['profit_loss'] = price_diff * trade['position_size']
+        price_diff = actual_exit_price - trade['entry_price']
+        pnl = price_diff * trade['position_size'] * trade['position']
+        
         trade['exit_price'] = actual_exit_price
         trade['exit_time'] = len(trade['price_history'])
         trade['active'] = False
+        trade['profit_loss'] = pnl
         
-        # Return realized profit/loss
-        return trade['profit_loss']
-
+        logger.info(f"""
+        Trade closed:
+        Type: {trade['type']}
+        Entry: ${trade['entry_price']:.2f}
+        Exit: ${actual_exit_price:.2f}
+        PnL: ${pnl:.2f}
+        Duration: {len(trade['price_history'])} bars
+        """)
+        
+        return pnl
+        
     def _calculate_backtest_metrics(self, capital, trades, max_capital):
         """Calculate backtest performance metrics"""
-        total_return = (capital - self.initial_capital) / self.initial_capital
-        n_trades = len(trades)
+        metrics = {}
         
+        # Basic metrics
+        n_trades = len(trades)
         if n_trades == 0:
             return {
                 'total_return': 0,
-                'n_trades': 0,
-                'avg_trade_return': 0,
-                'final_capital': capital,
+                'max_drawdown': 0,
                 'win_rate': 0,
-                'profit_factor': 0
+                'profit_factor': 0,
+                'avg_trade': 0,
+                'n_trades': 0
             }
         
-        # Calculate detailed metrics
-        profitable_trades = [t for t in trades if t['profit_loss'] > 0]
-        losing_trades = [t for t in trades if t['profit_loss'] <= 0]
+        # Calculate trade statistics
+        profitable_trades = [t for t in trades if t.get('profit_loss', 0) > 0]
+        losing_trades = [t for t in trades if t.get('profit_loss', 0) <= 0]
         
+        total_return = (capital - self.initial_capital) / self.initial_capital
         win_rate = len(profitable_trades) / n_trades * 100
         total_profit = sum(t['profit_loss'] for t in profitable_trades)
         total_loss = abs(sum(t['profit_loss'] for t in losing_trades))
@@ -368,11 +282,58 @@ class Backtester:
             'total_loss': total_loss
         } 
 
-    def _calculate_position_size(self, capital, current_price):
-        """Calculate position size based on risk per trade"""
+    def _calculate_position_size(self, capital, current_price, volatility=0.01):
+        """Dynamic position sizing based on volatility"""
+        # Base risk amount
         risk_amount = capital * self.config.risk_per_trade
-        position_size = min(
+        
+        # Adjust position size based on volatility
+        vol_factor = min(1.0, self.config.min_volatility / volatility)
+        
+        # Calculate base position size
+        base_size = min(
             risk_amount / (current_price * self.config.stop_loss),
             capital * self.config.max_position_size / current_price
         )
-        return position_size 
+        
+        return base_size * vol_factor  # Changed from max_size to base_size
+
+    def _prepare_backtest_data(self, y_true, y_pred):
+        """Prepare data for backtesting with technical indicators"""
+        df = pd.DataFrame({
+            'close': y_true,
+            'pred': y_pred
+        })
+        
+        # Calculate returns
+        df['returns'] = df['close'].pct_change()
+        df['pred_returns'] = df['pred'].pct_change()
+        
+        # Add technical indicators
+        df['rsi'] = ta.momentum.RSIIndicator(df['close']).rsi()
+        df['macd'] = ta.trend.MACD(df['close']).macd_diff()
+        
+        # Calculate trend
+        df['sma_20'] = ta.trend.SMAIndicator(df['close'], window=20).sma_indicator()
+        df['trend'] = np.where(df['close'] > df['sma_20'], 1, -1)
+        
+        # Calculate volatility
+        df['volatility'] = df['returns'].rolling(window=20).std()
+        
+        # Forward fill NaN values
+        df = df.fillna(method='ffill').fillna(0)
+        
+        return df 
+
+    def _get_state(self, i, df, position, capital, trades):
+        """Get current state for the RL agent"""
+        return np.array([
+            df['returns'].iloc[i],
+            df['pred_returns'].iloc[i],
+            df['rsi'].iloc[i] / 100,
+            df['trend'].iloc[i],
+            df['volatility'].iloc[i],
+            position,
+            capital / self.initial_capital,
+            len([t for t in trades if t['active']]) / self.config.max_trades
+        ]) 
