@@ -4,74 +4,171 @@ import torch.nn as nn
 import torch.optim as optim
 from collections import deque
 import random
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TradingAgent:
-    def __init__(self, state_size, action_size, config, learning_rate=0.001, 
-                 gamma=0.95, epsilon_decay=0.995, memory_size=2000):
+    def __init__(self, state_size, action_size, config, learning_rate=0.0001, 
+                 gamma=0.99, epsilon_decay=0.999, memory_size=10000):
         self.state_size = state_size
         self.action_size = action_size
         self.config = config
         self.memory = deque(maxlen=memory_size)
         self.gamma = gamma
         self.epsilon = 1.0
-        self.epsilon_min = 0.01
+        self.epsilon_min = 0.05
         self.epsilon_decay = epsilon_decay
-        self.model = self._build_model()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = self._build_model().to(self.device)
+        self.target_model = self._build_model().to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        self.update_target_every = 100
+        self.target_update_counter = 0
         
     def _build_model(self):
         model = nn.Sequential(
-            nn.Linear(self.state_size, 128),
+            nn.Linear(self.state_size, 512),
             nn.LeakyReLU(),
+            nn.LayerNorm(512),
             nn.Dropout(0.2),
-            nn.Linear(128, 64),
+            
+            nn.Linear(512, 256),
             nn.LeakyReLU(),
+            nn.LayerNorm(256),
             nn.Dropout(0.2),
-            nn.Linear(64, 32),
+            
+            nn.Linear(256, 128),
             nn.LeakyReLU(),
-            nn.Linear(32, self.action_size)
+            nn.LayerNorm(128),
+            nn.Dropout(0.2),
+            nn.Linear(128, self.action_size)
         )
         return model
         
     def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
+        # Calculate priority based on reward magnitude
+        priority = abs(reward) + 0.01  # Small constant to ensure non-zero priority
+        
+        # Store experience with priority
+        self.memory.append((state, action, reward, next_state, done, priority))
+        
+        # Keep memory size in check
+        if len(self.memory) > self.memory.maxlen:
+            # Remove lowest priority experience
+            min_priority_idx = min(range(len(self.memory)), 
+                                 key=lambda i: self.memory[i][5])
+            del self.memory[min_priority_idx]
         
     def act(self, state):
-        if random.random() <= self.epsilon:
-            return random.randrange(self.action_size)
+        # Decay epsilon
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
         
+        # Add temperature-based exploration
+        if random.random() <= self.epsilon:
+            # Use softmax exploration instead of pure random
+            temperature = max(0.1, self.epsilon)  # Higher temp = more random
+            state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                q_values = self.model(state)[0]
+                probs = torch.softmax(q_values / temperature, dim=0)
+                return np.random.choice(self.action_size, p=probs.cpu().numpy())
+            
+        # Greedy action
         with torch.no_grad():
-            state = torch.FloatTensor(state).unsqueeze(0)
+            state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             act_values = self.model(state)
-            return np.argmax(act_values[0].numpy())
+            return np.argmax(act_values[0].cpu().numpy())
             
     def replay(self, batch_size):
         if len(self.memory) < batch_size:
             return
-            
-        minibatch = random.sample(self.memory, batch_size)
-        states = torch.FloatTensor([t[0] for t in minibatch])
-        actions = torch.LongTensor([t[1] for t in minibatch])
-        rewards = torch.FloatTensor([t[2] for t in minibatch])
-        next_states = torch.FloatTensor([t[3] for t in minibatch])
-        dones = torch.FloatTensor([t[4] for t in minibatch])
         
-        # Current Q values
-        current_q = self.model(states)
-        current_q = current_q.gather(1, actions.unsqueeze(1))
+        # Sort experiences by absolute reward
+        sorted_memory = sorted(self.memory, key=lambda x: abs(x[2]), reverse=True)
         
-        # Next Q values
+        # Calculate sizes for top and random samples
+        top_size = min(int(len(sorted_memory) * 0.2), batch_size // 2)
+        random_size = min(batch_size - top_size, len(sorted_memory) - top_size)
+        
+        # Get top experiences
+        top_experiences = sorted_memory[:top_size]
+        
+        # Get random experiences from remaining memory
+        if random_size > 0:
+            random_experiences = random.sample(sorted_memory[top_size:], random_size)
+        else:
+            random_experiences = []
+        
+        # Combine experiences
+        minibatch = top_experiences + random_experiences
+        
+        if len(minibatch) == 0:
+            return
+        
+        # Process batch
+        states = torch.FloatTensor([t[0] for t in minibatch]).to(self.device)
+        actions = torch.LongTensor([t[1] for t in minibatch]).to(self.device)
+        rewards = torch.FloatTensor([t[2] for t in minibatch]).to(self.device)
+        next_states = torch.FloatTensor([t[3] for t in minibatch]).to(self.device)
+        dones = torch.FloatTensor([t[4] for t in minibatch]).to(self.device)
+        
+        # Double DQN update
         with torch.no_grad():
-            next_q = self.model(next_states)
-            max_next_q = next_q.max(1)[0]
-            target_q = rewards + (1 - dones) * self.gamma * max_next_q
+            # Get actions from main network
+            next_actions = self.model(next_states).max(1)[1].unsqueeze(1)
+            # Get Q-values from target network for those actions
+            next_q = self.target_model(next_states).gather(1, next_actions)
+            # Calculate target Q-values
+            target_q = rewards.unsqueeze(1) + (1 - dones.unsqueeze(1)) * self.gamma * next_q
         
-        # Compute loss and update
-        loss = nn.MSELoss()(current_q.squeeze(), target_q)
+        # Get current Q-values
+        current_q = self.model(states).gather(1, actions.unsqueeze(1))
+        
+        # Calculate loss with Huber Loss (more robust than MSE)
+        loss = nn.HuberLoss()(current_q, target_q)
+        
+        # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)  # Prevent exploding gradients
         self.optimizer.step()
         
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay 
+        # Update target network periodically
+        self.target_update_counter += 1
+        if self.target_update_counter >= self.update_target_every:
+            self.target_model.load_state_dict(self.model.state_dict())
+            self.target_update_counter = 0
+        
+        return loss.item()  # Return loss for monitoring
+
+    def save_model(self, path):
+        """Save the complete model state"""
+        checkpoint = {
+            'model_state_dict': self.model.state_dict(),
+            'target_model_state_dict': self.target_model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'epsilon': self.epsilon,
+            'memory': list(self.memory)
+        }
+        torch.save(checkpoint, path)
+
+    def load_model(self, path):
+        """Load the complete model state"""
+        try:
+            checkpoint = torch.load(path)
+            
+            # Handle both old and new save formats
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.target_model.load_state_dict(checkpoint['target_model_state_dict'])
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                self.epsilon = checkpoint['epsilon']
+                self.memory = deque(checkpoint['memory'], maxlen=self.memory.maxlen)
+            else:
+                # Old format or invalid checkpoint
+                logger.warning("Invalid or old format checkpoint. Starting with fresh model.")
+                
+        except Exception as e:
+            logger.warning(f"Error loading model: {e}. Starting with fresh model.") 

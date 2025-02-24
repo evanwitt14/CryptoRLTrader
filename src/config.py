@@ -56,6 +56,20 @@ class Config:
     min_volatility: float = 0.005
     max_drawdown: float = 0.15
     
+    # RL Agent parameters
+    rl_learning_rate: float = 0.0003
+    rl_gamma: float = 0.95
+    rl_epsilon_decay: float = 0.995
+    rl_memory_size: int = 20000
+    rl_batch_size: int = 256
+    rl_update_target_freq: int = 50
+    rl_min_epsilon: float = 0.10
+    
+    # Trading thresholds for RL
+    rl_position_threshold: float = 0.5
+    rl_min_trade_interval: int = 5
+    rl_reward_scaling: float = 1.0
+    
     def __post_init__(self):
         self.data_dir.mkdir(exist_ok=True)
         self.model_dir.mkdir(exist_ok=True)
