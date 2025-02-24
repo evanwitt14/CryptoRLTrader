@@ -1,0 +1,10 @@
+torch>=2.2.0
+pandas>=2.2.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+plotly>=5.18.0
+stable-baselines3>=2.2.1
+python-binance>=1.0.19
+transformers>=4.37.0
+ta>=0.10.2
+tensorboard>=2.15.1 
