@@ -1,91 +1,111 @@
-Crypto Trading Bot with Deep Reinforcement Learning
+## Table of Contents
+- [Overview](#overview)
+- [Features](#features)
+- [Installation](#installation)
+- [Project Structure](#project-structure)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Risk Management](#risk-management)
+- [Performance Metrics](#performance-metrics)
+- [Best Practices](#best-practices)
+- [Warning](#warning)
+- [Contributing](#contributing)
+- [License](#license)
 
-Overview
-An advanced cryptocurrency trading system that combines ensemble machine learning for price prediction with reinforcement learning for optimal trade execution. The system uses LSTM, Random Forest, and SVR models for prediction, coupled with a DQN (Deep Q-Network) agent for trade decisions.
+## Overview
+This project is an advanced cryptocurrency trading system designed for traders and researchers who want to leverage machine learning and reinforcement learning for automated trading. It combines **ensemble machine learning** for price prediction with **reinforcement learning** for optimal trade execution. The system uses:
+- **LSTM** for sequential pattern recognition
+- **Random Forest** for feature-based predictions
+- **SVR** for non-linear relationships
+- **DQN (Deep Q-Network)** for trade decisions
 
-Features
-Ensemble price prediction
-Reinforcement learning-based trade execution
-Dynamic position sizing
-Advanced risk management
-Technical indicator integration
-Comprehensive backtesting
+The bot is particularly useful for backtesting trading strategies and optimizing risk management in volatile markets.
 
-Installation
-git clone <repository-url>
-cd crypto-trading-bot
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
+## Quick Start
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd crypto-trading-bot
+   ```
 
-pip install -r requirements.txt
+2. Set up a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # Linux/Mac
+   venv\Scripts\activate     # Windows
+   ```
 
-Project Structure
-src/
-├── main.py              
-├── train_rl_agent.py    
-├── backtester.py        
-├── model_trainer.py     
-├── config.py            
-└── data_processor.py    
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-Configuration
-    entry_threshold: float = 0.005    
-    exit_threshold: float = 0.001
-    stop_loss: float = 0.025         
-    take_profit: float = 0.035       
-    trailing_stop: float = 0.015     
-    max_position_size: float = 0.08   
-    
-    # Risk management
-    risk_per_trade: float = 0.01     
-    max_trades: int = 1              
-    min_volatility: float = 0.01    
-    max_drawdown: float = 0.15
+4. Train the ensemble models:
+   ```bash
+   python src/main.py --symbol BTC/USDT --interval 1d --lookback 60 --epochs 100
+   ```
 
-Usage
-1. Trains the ensemble of LSTM, Random Forest, and SVR models:
-python src/main.py --symbol BTC/USDT --interval 1d --lookback 60 --epochs 100
+5. Train the RL agent:
+   ```bash
+   python src/train_rl_agent.py --symbol BTC/USDT --interval 1d --episodes 1000
+   ```
 
-2. Trains the RL agent:
-python src/train_rl_agent.py --symbol BTC/USDT --interval 1d --episodes 1000
+6. Run backtesting:
+   ```bash
+   python src/backtester.py --symbol BTC/USDT --interval 1d --lookback 60
+   ```
 
-3. Runs backtesting:
-python src/backtester.py --symbol BTC/USDT --interval 1d --lookback 60
-The backtesting engine (referencing backtester.py):
+## Configuration
+The system is highly configurable through the `Config` class in `src/config.py`. Key parameters include:
 
+### Trading Parameters
+- `entry_threshold`: Minimum price movement required to enter a trade (default: 0.005)
+- `exit_threshold`: Minimum price movement required to exit a trade (default: 0.001)
+- `stop_loss`: Maximum loss per trade (default: 0.025)
+- `take_profit`: Target profit per trade (default: 0.035)
+- `trailing_stop`: Dynamic stop-loss adjustment (default: 0.015)
+- `max_position_size`: Maximum capital allocated to a single trade (default: 0.08)
 
-Risk Management
-1. Position sizing
-2. Exit condition
+### Risk Management
+- `risk_per_trade`: Percentage of capital risked per trade (default: 0.01)
+- `max_trades`: Maximum number of concurrent trades (default: 1)
+- `min_volatility`: Minimum market volatility required for trading (default: 0.01)
+- `max_drawdown`: Maximum allowable drawdown (default: 0.15)
 
-Performance Metrics
-The system tracks various metrics (referencing model_trainer.py):
+### RL Agent Parameters
+- `rl_learning_rate`: Learning rate for the DQN agent (default: 0.0003)
+- `rl_gamma`: Discount factor for future rewards (default: 0.95)
+- `rl_epsilon`: Exploration rate (default: 0.9)
 
-Command Line Arguments
---symbol     Trading pair (default: BTC/USDT)
---interval   Timeframe (default: 1d)
---lookback   Historical data window (default: 60)
---epochs     Training epochs for base models (default: 100)
---episodes   Training episodes for RL agent (default: 1000)
+## Performance Metrics
+The system tracks the following metrics during backtesting and live trading:
+- **Total Return**: Overall profit/loss percentage
+- **Win Rate**: Percentage of profitable trades
+- **Profit Factor**: Ratio of total profit to total loss
+- **Max Drawdown**: Largest peak-to-trough decline in capital
+- **Sharpe Ratio**: Risk-adjusted return
+- **Sortino Ratio**: Risk-adjusted return focusing on downside risk
+- **Average Trade Return**: Average profit/loss per trade
 
+## Troubleshooting
+### Issue: Missing Data
+- Ensure the `data` directory exists and contains historical price data for the specified symbol and interval.
 
-Best Practices
-Start with daily timeframes (1d)
-Use at least 60 days of lookback data
-Train base models first, then RL agent
-Backtest thoroughly before live trading
-Monitor drawdown and risk metrics closely
-Warning
-This is a research project. Cryptocurrency markets are highly volatile and trading carries significant risk. Use at your own discretion.
-Contributing
-Pull requests are welcome. For major changes, please open an issue first to discuss proposed changes.
-License
-MIT
-Would you like me to elaborate on any specific component or add more details to the documentation?
+### Issue: Model Training Fails
+- Verify that all dependencies are installed correctly by running `pip install -r requirements.txt`.
+- Check that your system has sufficient memory and GPU resources for training.
 
+### Issue: Backtesting Errors
+- Ensure the `models` directory contains trained models for the specified symbol.
 
+## FAQ
+### Can I use this for live trading?
+This is primarily a research project. While it can be adapted for live trading, proceed with caution and thoroughly backtest your strategies.
 
+### What cryptocurrencies are supported?
+The bot supports any trading pair available from your data source (e.g., Binance, Coinbase). Default is `BTC/USDT`.
 
+### Can I add custom indicators?
+Yes, you can add custom technical indicators by modifying the `technical_indicators` list in `src/config.py`.
 
-
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
