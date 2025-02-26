@@ -70,7 +70,7 @@ Command Line Arguments
 --episodes   Training episodes for RL agent (default: 1000)
 
 
-est Practices
+Best Practices
 Start with daily timeframes (1d)
 Use at least 60 days of lookback data
 Train base models first, then RL agent
