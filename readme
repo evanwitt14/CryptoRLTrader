@@ -108,4 +108,4 @@ The bot supports any trading pair available from your data source (e.g., Binance
 ### Can I add custom indicators?
 Yes, you can add custom technical indicators by modifying the `technical_indicators` list in `src/config.py`.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT]]
